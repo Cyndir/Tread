@@ -13,7 +13,7 @@ var db *DB
 
 func main() {
 
-	db, err := sql.Open("sqlite3", "./foo.db")
+	db, err := sql.Open("sqlite3", "./db.sql")
 	checkErr(err)
 	defer db.Close()
 	var router = mux.NewRouter()
@@ -23,9 +23,26 @@ func main() {
 	router.HandleFunc("/add", handleAdd).methods("PUT")
 
 	fmt.Println("Running server!")
-	log.Fatal(http.ListenAndServe(":3000", router))
-}
+	//Set up graceful shutdown
+	errs := make(chan error, 2)
+	server := &http.Server{Addr: ":8080", Handler: handler}
 
+	go func() {
+		errs <- server.ListenAndServe()
+	}()
+
+	go func() {
+		// Setting up signal capturing
+		c := make(chan os.Signal)
+		signal.Notify(c, os.Interrupt)
+		errs <- fmt.Errorf("%s", <-c)
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+	// Waiting for SIGINT (pkill -2)
+	<-errs
+}
 func healthCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode("Still alive!")
 }
