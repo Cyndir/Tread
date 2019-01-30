@@ -20,14 +20,14 @@ func main() {
 	defer db.Close()
 	var router = mux.NewRouter()
 	router.HandleFunc("/healthcheck", healthCheck).Methods("GET")
-	router.HandleFunc("/getall/{user}", returnAll).Methods("GET")
+	router.HandleFunc("/getall/{user}", getAll).Methods("GET")
 	router.HandleFunc("/delete", handleDelete).Methods("DELETE")
 	router.HandleFunc("/add", handleAdd).Methods("PUT")
 
 	fmt.Println("Running server!")
 	//Set up graceful shutdown
 	errs := make(chan error, 2)
-	server := &http.Server{Addr: ":8080"}
+	server := &http.Server{Addr: ":8080", Handler: router}
 
 	go func() {
 		errs <- server.ListenAndServe()
@@ -48,24 +48,29 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode("Still alive!")
 }
 
-func returnAll(w http.ResponseWriter, r *http.Request) {
-	var uid int
+func getAll(w http.ResponseWriter, r *http.Request) {
 	var link string
 	var links []string
-	uidSelect, err := db.Prepare("SELECT uid FROM users where uname = ?")
-	checkErr(err)
+	uname := mux.Vars(r)["user"]
+	if uname == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	linkSelect, err := db.Prepare("SELECT link FROM links WHERE uid = ?")
-	checkErr(err)
-
-	uName := mux.Vars(r)["user"]
-	rows, err := uidSelect.Query(uName)
-	checkErr(err)
-	rows.Next()
-	err = rows.Scan(&uid)
-	checkErr(err)
-
-	rows, err = linkSelect.Query(uid)
-	checkErr(err)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	uid, err := getUid(uname)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	rows, err := linkSelect.Query(uid)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	for rows.Next() {
 		rows.Scan(&link)
 		links = append(links, link)
@@ -75,56 +80,80 @@ func returnAll(w http.ResponseWriter, r *http.Request) {
 }
 func handleDelete(w http.ResponseWriter, r *http.Request) {
 
-	var uid int
-
 	vars := r.URL.Query()
 	uname := vars.Get("name")
 	link := vars.Get("link")
+	if link == "" || uname == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	//would need to check auth here
-	uidSelect, err := db.Prepare("SELECT uid FROM users where uname = ?")
-	checkErr(err)
 	linkDelete, err := db.Prepare("DELETE FROM links WHERE uid = ? AND link = ?")
-	checkErr(err)
-
-	rows, err := uidSelect.Query(uname)
-	checkErr(err)
-	rows.Next()
-	err = rows.Scan(&uid)
-	checkErr(err)
-
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	uid, err := getUid(uname)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	res, err := linkDelete.Exec(uid, link)
-	checkErr(err)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	numRows, err := res.RowsAffected()
-	checkErr(err)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	msg := fmt.Sprintf("Rows deleted: %d", numRows)
 	json.NewEncoder(w).Encode(map[string]string{"message": msg})
 
 }
 
 func handleAdd(w http.ResponseWriter, r *http.Request) {
-	var uid int
 
 	vars := r.URL.Query()
 	uname := vars.Get("name")
 	link := vars.Get("link")
-
-	uidSelect, err := db.Prepare("SELECT uid FROM users where uname = ?")
-	checkErr(err)
+	if link == "" || uname == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	linkAdd, err := db.Prepare("INSERT INTO links (uid, link) VALUES (?, ?)")
-	checkErr(err)
-
-	rows, err := uidSelect.Query(uname)
-	checkErr(err)
-	rows.Next()
-	err = rows.Scan(&uid)
-	checkErr(err)
-
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	uid, err := getUid(uname)
 	res, err := linkAdd.Exec(uid, link)
-	checkErr(err)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	numRows, err := res.RowsAffected()
-	checkErr(err)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	msg := fmt.Sprintf("Rows added: %d", numRows)
 	json.NewEncoder(w).Encode(map[string]string{"message": msg})
+
+}
+func getUid(uName string) (uid int, err error) {
+	uidSelect, err := db.Prepare("SELECT uid FROM users where uname = ?")
+	if err != nil {
+		return
+	}
+	row := uidSelect.QueryRow(uName)
+	err = row.Scan(&uid)
+	if err != nil {
+		return
+	}
+
+	return
 
 }
 
